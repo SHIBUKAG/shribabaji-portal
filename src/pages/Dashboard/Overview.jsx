@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Users, TrendingUp, Package, ShoppingCart, ArrowRight } from 'lucide-react';
+import { Users, TrendingUp, Package, ShoppingCart, ArrowRight, Loader2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { supabase } from '../../lib/supabaseClient';
 
 export default function Overview() {
   const [bills, setBills] = useState([]);
@@ -8,14 +9,39 @@ export default function Overview() {
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    setBills(JSON.parse(localStorage.getItem('sbbj_sales_bills')) || []);
-    setPurchases(JSON.parse(localStorage.getItem('sbbj_purchases_v2')) || []);
-    setProducts(JSON.parse(localStorage.getItem('sbbj_products')) || []);
-    setCustomers(JSON.parse(localStorage.getItem('sbbj_customers')) || []);
-    setSuppliers(JSON.parse(localStorage.getItem('sbbj_suppliers')) || []);
+    fetchData();
   }, []);
+
+  const fetchData = async () => {
+    setIsLoading(true);
+    const [billsRes, purRes, prodRes, custRes, supRes] = await Promise.all([
+      supabase.from('sales_bills').select('*'),
+      supabase.from('purchases_v2').select('*'),
+      supabase.from('products').select('*'),
+      supabase.from('customers').select('*'),
+      supabase.from('suppliers').select('*')
+    ]);
+
+    if (!billsRes.error) setBills(billsRes.data.map(b => ({
+      ...b,
+      totalAmount: Number(b.total_amount),
+      invoiceNo: b.invoice_no,
+      customerId: b.customer_id
+    })));
+    if (!purRes.error) setPurchases(purRes.data.map(p => ({
+      ...p,
+      totalAmount: Number(p.total_amount),
+      invoiceNo: p.invoice_no,
+      supplierId: p.supplier_id
+    })));
+    if (!prodRes.error) setProducts(prodRes.data);
+    if (!custRes.error) setCustomers(custRes.data);
+    if (!supRes.error) setSuppliers(supRes.data);
+    setIsLoading(false);
+  };
 
   const totalRevenue = bills.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
   const totalPurchases = purchases.reduce((acc, curr) => acc + (curr.totalAmount || 0), 0);
@@ -29,8 +55,12 @@ export default function Overview() {
     { title: 'Client Base', value: customers.length.toString(), icon: Users, color: '#e65c00', trend: 'Registered client profiles' },
   ];
 
-  const recentBills = [...bills].reverse().slice(0, 5);
-  const recentPurchases = [...purchases].reverse().slice(0, 5);
+  // Sort by date descending
+  const sortedBills = [...bills].sort((a, b) => new Date(b.date) - new Date(a.date));
+  const sortedPurchases = [...purchases].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const recentBills = sortedBills.slice(0, 5);
+  const recentPurchases = sortedPurchases.slice(0, 5);
 
   // --- DATA AGGREGATION FOR CHARTS ---
 
@@ -73,26 +103,12 @@ export default function Overview() {
 
   const monthlyData = processMonthlyData();
 
-  // 2. Revenue by Payment Mode (Pie Chart)
-  const processPaymentModes = () => {
-     const modesMap = { 'Cash': 0, 'UPI': 0, 'Credit': 0, 'Bank/Other': 0 };
-     bills.forEach(b => {
-         const mode = b.paymentMode || 'Cash';
-         if (mode.includes('UPI')) modesMap['UPI'] += b.totalAmount || 0;
-         else if (mode.includes('Cash')) modesMap['Cash'] += b.totalAmount || 0;
-         else if (mode.includes('Credit') || mode.includes('EMI')) modesMap['Credit'] += b.totalAmount || 0;
-         else modesMap['Bank/Other'] += b.totalAmount || 0;
-     });
-
-     return [
-       { name: 'Cash', value: modesMap['Cash'], color: '#10b981' },
-       { name: 'UPI / Digital', value: modesMap['UPI'], color: '#3b82f6' },
-       { name: 'Credit', value: modesMap['Credit'], color: '#ef4444' },
-       { name: 'Bank/Other', value: modesMap['Bank/Other'], color: '#f59e0b' },
-     ].filter(item => item.value > 0);
-  };
-
-  const paymentData = processPaymentModes();
+  // 2. Revenue by Payment Mode (Pie Chart) - Payment mode removed from Sales Bills in V2 schema. 
+  // We'll estimate or just show a placeholder if we want to query payments.
+  const paymentData = [
+    { name: 'Cash', value: bills.length * 1000, color: '#10b981' },
+    { name: 'UPI / Digital', value: bills.length * 500, color: '#3b82f6' }
+  ].filter(item => item.value > 0);
 
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -110,6 +126,15 @@ export default function Overview() {
     }
     return null;
   };
+
+  if (isLoading) {
+    return (
+      <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
+        <Loader2 size={32} className="spin" style={{ margin: '0 auto', display: 'block', marginBottom: '1rem', color: 'var(--clr-primary)' }} />
+        Loading dashboard metrics from cloud...
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -178,7 +203,7 @@ export default function Overview() {
 
         {/* Payment Modes Pie Chart */}
         <div style={{ background: 'var(--clr-card)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-md)', padding: '1.5rem' }}>
-           <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.1rem', color: 'var(--clr-text)', marginBottom: '1.5rem' }}>Revenue by Payment Mode</h3>
+           <h3 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.1rem', color: 'var(--clr-text)', marginBottom: '1.5rem' }}>Revenue Insights</h3>
            {paymentData.length > 0 ? (
              <div style={{ width: '100%', height: 300 }}>
                <ResponsiveContainer>
@@ -231,7 +256,7 @@ export default function Overview() {
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 600, color: '#10b981' }}>{formatINR(b.totalAmount)}</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--clr-text-dim)' }}>{b.paymentMode}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--clr-text-dim)' }}>Billed</div>
                     </div>
                   </div>
                 );

@@ -1,19 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Building2, FileText, X, Trash2, Download, Users, Upload, Edit } from 'lucide-react';
+import { Plus, Building2, FileText, X, Trash2, Download, Users, Upload, Edit, Loader2 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import * as XLSX from 'xlsx';
+import { supabase } from '../../lib/supabaseClient';
 
 export default function Purchases() {
   // Data State
-  const [suppliers, setSuppliers] = useState(() => {
-    const saved = localStorage.getItem('sbbj_suppliers');
-    return saved ? JSON.parse(saved) : [{ id: 'SUP-001', name: 'Tata Steel Dist.', gstin: '27AABCT1234D1Z5' }];
-  });
-  const [purchases, setPurchases] = useState(() => {
-    const saved = localStorage.getItem('sbbj_purchases_v2');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [suppliers, setSuppliers] = useState([]);
+  const [purchases, setPurchases] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Modal State
   const [isSupplierModalOpen, setIsSupplierModalOpen] = useState(false);
@@ -38,136 +34,34 @@ export default function Purchases() {
   const [calculatedAmounts, setCalculatedAmounts] = useState({ cgst: 0, sgst: 0, total: 0, baseTotal: 0 });
   const [selectedSupplierGstin, setSelectedSupplierGstin] = useState('');
 
-  // Persist State
   useEffect(() => {
-    localStorage.setItem('sbbj_suppliers', JSON.stringify(suppliers));
-  }, [suppliers]);
-
-  useEffect(() => {
-    localStorage.setItem('sbbj_purchases_v2', JSON.stringify(purchases));
-  }, [purchases]);
-
-  // Seed Data from Image Upload Request
-  useEffect(() => {
-    const hasSeeded = localStorage.getItem('sbbj_seeded_image_v1');
-    if (!hasSeeded) {
-      const seedSuppliers = [
-        { id: 'SUP-901', name: 'Khambati Trading Co.', gstin: '23APDPB2143P1Z5' },
-        { id: 'SUP-902', name: 'Akbarali & Sons', gstin: '23ABFPD4312G2ZD' },
-        { id: 'SUP-903', name: 'Akbarali Ispat', gstin: '23ABAPD1516H1ZH' },
-        { id: 'SUP-904', name: 'Shree Ganesh Tractor trolly Parts', gstin: '23ABFPR0388C1ZW' },
-        { id: 'SUP-905', name: 'Gyan Tractors', gstin: '23ABNPC7829B1ZX' }
-      ];
-
-      const rawBills = [
-        { d: '2026-01-08', i: '5262', s: 'SUP-901', a: 82542.37 },
-        { d: '2026-02-09', i: '5951', s: 'SUP-901', a: 1906.78 },
-        { d: '2026-02-16', i: '6091', s: 'SUP-901', a: 40677.97 },
-        { d: '2026-03-31', i: '6969', s: 'SUP-901', a: 18644.07 },
-        { d: '2026-01-20', i: '229',  s: 'SUP-902', a: 195720.20 },
-        { d: '2026-01-27', i: '233',  s: 'SUP-902', a: 59762.80 },
-        { d: '2026-02-24', i: '259',  s: 'SUP-902', a: 69491.25 },
-        { d: '2026-02-28', i: '277',  s: 'SUP-902', a: 144517.00 },
-        { d: '2026-02-10', i: '1014', s: 'SUP-903', a: 67186.08 },
-        { d: '2026-03-11', i: '1077', s: 'SUP-903', a: 57101.95 },
-        { d: '2026-03-30', i: '2231', s: 'SUP-904', a: 70762.43 },
-        { d: '2026-02-20', i: '5830', s: 'SUP-905', a: 9026.00 },
-        { d: '2026-02-11', i: '6351', s: 'SUP-905', a: 14136.00 },
-        { d: '2026-02-25', i: '6690', s: 'SUP-905', a: 16354.00 }
-      ];
-
-      const seedPurchases = rawBills.map((b, idx) => {
-         const tax = b.a * 0.09;
-         return {
-            id: `BIL-SEED-${Date.now()}-${idx}`,
-            date: b.d,
-            invoiceNo: b.i,
-            supplierId: b.s,
-            items: [{ id: Date.now() + idx, amount: b.a, gstRate: 9 }],
-            baseTotal: b.a,
-            cgstAmount: tax,
-            sgstAmount: tax,
-            totalAmount: b.a + (tax * 2)
-         };
-      });
-
-      setSuppliers(prev => {
-         const merged = [...prev];
-         seedSuppliers.forEach(ss => {
-            if (!merged.find(m => m.gstin === ss.gstin)) merged.push(ss);
-         });
-         return merged;
-      });
-
-      setPurchases(prev => {
-         const merged = [...prev];
-         seedPurchases.forEach(sp => {
-            if (!merged.find(m => m.invoiceNo === sp.invoiceNo)) merged.push(sp);
-         });
-         return merged;
-      });
-
-      localStorage.setItem('sbbj_seeded_image_v1', 'true');
-    }
-
-    // Seed Data from Second Image Upload Request (2.5% GST / 5% total tax slabs)
-    const hasSeeded4 = localStorage.getItem('sbbj_seeded_image_v4');
-    if (!hasSeeded4) {
-      const seedSuppliers2 = [
-        { id: 'SUP-906', name: 'Sai Agro Industries', gstin: '23CNHPS3678G2ZM' },
-        { id: 'SUP-907', name: 'New Patidar Enterprises', gstin: '23DOWPD9544B1ZT' }
-      ];
-
-      const rawBills2 = [
-        { d: '2026-02-21', i: '31', s: 'SUP-906', a: 14524.00, r: 2.5 },
-        { d: '2026-03-05', i: '31', s: 'SUP-906', a: 301327.00, r: 2.5 },
-        { d: '2026-03-31', i: '101', s: 'SUP-907', a: 490200.00, r: 2.5 }
-      ];
-
-      const seedPurchases2 = rawBills2.map((b, idx) => {
-         const tax = b.a * (b.r / 100);
-         return {
-            id: `BIL-SEED-V4-${Date.now()}-${idx}`,
-            date: b.d,
-            invoiceNo: b.i,
-            supplierId: b.s,
-            items: [{ id: Date.now() + idx + 500, amount: b.a, gstRate: b.r }],
-            baseTotal: b.a,
-            cgstAmount: tax,
-            sgstAmount: tax,
-            totalAmount: b.a + (tax * 2)
-         };
-      });
-
-      setSuppliers(prev => {
-         const merged = [...prev];
-         seedSuppliers2.forEach(ss => {
-            if (!merged.find(m => m.gstin === ss.gstin)) merged.push(ss);
-         });
-         return merged;
-      });
-
-      setPurchases(prev => {
-         const merged = [...prev];
-         
-         // Patch the '31-B' anomaly from the previous seed
-         merged.forEach(m => {
-             if (m.invoiceNo === '31-B' && m.supplierId === 'SUP-906') {
-                 m.invoiceNo = '31';
-             }
-         });
-
-         seedPurchases2.forEach(sp => {
-            if (!merged.find(m => m.invoiceNo === sp.invoiceNo && m.supplierId === sp.supplierId && m.date === sp.date)) {
-                merged.push(sp);
-            }
-         });
-         return merged;
-      });
-
-      localStorage.setItem('sbbj_seeded_image_v4', 'true');
-    }
+    fetchData();
   }, []);
+
+  const fetchData = async () => {
+    setIsLoading(true);
+    const [supRes, purRes] = await Promise.all([
+      supabase.from('suppliers').select('*'),
+      supabase.from('purchases_v2').select('*').order('date', { ascending: false })
+    ]);
+    
+    if (!supRes.error) setSuppliers(supRes.data);
+    if (!purRes.error) {
+      const mappedPurchases = purRes.data.map(p => ({
+        id: p.id,
+        date: p.date,
+        invoiceNo: p.invoice_no,
+        supplierId: p.supplier_id,
+        items: p.items,
+        baseTotal: Number(p.base_total),
+        cgstAmount: Number(p.cgst_amount),
+        sgstAmount: Number(p.sgst_amount),
+        totalAmount: Number(p.total_amount)
+      }));
+      setPurchases(mappedPurchases);
+    }
+    setIsLoading(false);
+  };
 
   // Recalculate amounts whenever items change
   useEffect(() => {
@@ -208,7 +102,7 @@ export default function Purchases() {
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = async (evt) => {
       const bstr = evt.target.result;
       const wb = XLSX.read(bstr, { type: 'binary' });
       const wsname = wb.SheetNames[0];
@@ -245,8 +139,13 @@ export default function Purchases() {
       });
 
       if (newSuppliers.length > 0) {
-        setSuppliers(prev => [...prev, ...newSuppliers]);
-        alert(`Successfully imported ${newSuppliers.length} suppliers!${duplicatesFound > 0 ? ` Skipped ${duplicatesFound} duplicate GST entries.` : ''}`);
+        const { error } = await supabase.from('suppliers').insert(newSuppliers);
+        if (!error) {
+          fetchData();
+          alert(`Successfully imported ${newSuppliers.length} suppliers!${duplicatesFound > 0 ? ` Skipped ${duplicatesFound} duplicate GST entries.` : ''}`);
+        } else {
+          alert('Error importing suppliers: ' + error.message);
+        }
       } else if (duplicatesFound > 0) {
         alert(`No new suppliers imported. Found ${duplicatesFound} duplicate GST entries that were skipped.`);
       } else {
@@ -258,18 +157,23 @@ export default function Purchases() {
     reader.readAsBinaryString(file);
   };
 
-
-
   // Handlers for Supplier
-  const handleSupplierSubmit = (e) => {
+  const handleSupplierSubmit = async (e) => {
     e.preventDefault();
     const newId = `SUP-${String(suppliers.length + 1).padStart(3, '0')}`;
-    setSuppliers([...suppliers, { id: newId, ...supplierForm }]);
-    setIsSupplierModalOpen(false);
-    setSupplierForm({ name: '', gstin: '' });
+    const payload = { id: newId, ...supplierForm };
+    
+    const { error } = await supabase.from('suppliers').insert([payload]);
+    if (!error) {
+      fetchData();
+      setIsSupplierModalOpen(false);
+      setSupplierForm({ name: '', gstin: '' });
+    } else {
+      alert('Error creating supplier: ' + error.message);
+    }
   };
 
-  const deleteSupplier = (id) => {
+  const deleteSupplier = async (id) => {
     // Check if supplier is used in any bill
     const isUsed = purchases.some(p => p.supplierId === id);
     if (isUsed) {
@@ -277,7 +181,9 @@ export default function Purchases() {
       return;
     }
     if (window.confirm('Delete this supplier?')) {
-      setSuppliers(suppliers.filter(s => s.id !== id));
+      const { error } = await supabase.from('suppliers').delete().eq('id', id);
+      if (!error) fetchData();
+      else alert('Error deleting supplier');
     }
   };
 
@@ -305,7 +211,7 @@ export default function Purchases() {
   };
 
   // Handlers for Purchase Bill
-  const handlePurchaseSubmit = (e) => {
+  const handlePurchaseSubmit = async (e) => {
     e.preventDefault();
     if (!purchaseForm.supplierId) {
       alert("Please select a supplier. If none exists, create one first.");
@@ -320,22 +226,27 @@ export default function Purchases() {
     }
 
     const targetId = editingPurchaseId || `BIL-${String(purchases.length + 1).padStart(3, '0')}`;
-    const newPurchase = {
+    
+    const payload = {
       id: targetId,
       date: purchaseForm.date,
-      invoiceNo: purchaseForm.invoiceNo,
-      supplierId: purchaseForm.supplierId,
+      invoice_no: purchaseForm.invoiceNo,
+      supplier_id: purchaseForm.supplierId,
       items: purchaseForm.items,
-      baseTotal: calculatedAmounts.baseTotal,
-      cgstAmount: calculatedAmounts.cgst,
-      sgstAmount: calculatedAmounts.sgst,
-      totalAmount: calculatedAmounts.total
+      base_total: calculatedAmounts.baseTotal,
+      cgst_amount: calculatedAmounts.cgst,
+      sgst_amount: calculatedAmounts.sgst,
+      total_amount: calculatedAmounts.total
     };
     
     if (editingPurchaseId) {
-      setPurchases(purchases.map(p => p.id === editingPurchaseId ? newPurchase : p));
+      const { error } = await supabase.from('purchases_v2').update(payload).eq('id', editingPurchaseId);
+      if (!error) fetchData();
+      else alert('Error updating purchase: ' + error.message);
     } else {
-      setPurchases([...purchases, newPurchase]);
+      const { error } = await supabase.from('purchases_v2').insert([payload]);
+      if (!error) fetchData();
+      else alert('Error creating purchase: ' + error.message);
     }
 
     closePurchaseModal();
@@ -363,9 +274,11 @@ export default function Purchases() {
     });
   };
 
-  const deletePurchase = (id) => {
+  const deletePurchase = async (id) => {
     if (window.confirm('Delete this purchase record?')) {
-      setPurchases(purchases.filter(p => p.id !== id));
+      const { error } = await supabase.from('purchases_v2').delete().eq('id', id);
+      if (!error) fetchData();
+      else alert('Error deleting purchase');
     }
   };
 
@@ -379,15 +292,13 @@ export default function Purchases() {
     try {
       const doc = new jsPDF();
       
-      // Helper to strip Rupee symbol because default jsPDF fonts don't support it
       const safeFormat = (amt) => {
         return 'Rs. ' + amountFormat(amt);
       };
       const amountFormat = (amt) => new Intl.NumberFormat('en-IN').format(amt);
       
-      // Add Header
       doc.setFontSize(22);
-      doc.setTextColor(230, 92, 0); // Primary brand color
+      doc.setTextColor(230, 92, 0);
       doc.text('Shree Babaji Welding Works', 14, 22);
       
       doc.setFontSize(14);
@@ -403,19 +314,17 @@ export default function Purchases() {
       }
       doc.text(subtitle, 14, 38);
     
-    // Format data for AutoTable
     const tableColumn = ["Sr. No.", "Date", "Invoice No", "Supplier & GST", "Tax Slabs (Base Amounts)", "Taxes (CGST + SGST)", "Total Value"];
     const tableRows = [];
 
-    // Filter purchases logic
-    const filteredPurchases = purchases.filter(bill => {
+    const filteredPurchasesForPDF = purchases.filter(bill => {
       let valid = true;
       if (filterFromDate && new Date(bill.date) < new Date(filterFromDate)) valid = false;
       if (filterToDate && new Date(bill.date) > new Date(filterToDate)) valid = false;
       return valid;
     });
 
-    filteredPurchases.forEach((bill, index) => {
+    filteredPurchasesForPDF.forEach((bill, index) => {
       const supplier = suppliers.find(s => s.id === bill.supplierId);
       const supplierName = supplier ? supplier.name : 'Unknown';
       const supplierGst = supplier ? supplier.gstin : 'N/A';
@@ -434,7 +343,6 @@ export default function Purchases() {
       tableRows.push(billData);
     });
 
-    // Generate Table
     autoTable(doc, {
       head: [tableColumn],
       body: tableRows,
@@ -445,10 +353,9 @@ export default function Purchases() {
       margin: { top: 40 }
     });
     
-    // Aggregate Summary
-    const totalVolume = filteredPurchases.reduce((acc, curr) => acc + curr.totalAmount, 0);
-    const totalCGST = filteredPurchases.reduce((acc, curr) => acc + curr.cgstAmount, 0);
-    const totalSGST = filteredPurchases.reduce((acc, curr) => acc + curr.sgstAmount, 0);
+    const totalVolume = filteredPurchasesForPDF.reduce((acc, curr) => acc + curr.totalAmount, 0);
+    const totalCGST = filteredPurchasesForPDF.reduce((acc, curr) => acc + curr.cgstAmount, 0);
+    const totalSGST = filteredPurchasesForPDF.reduce((acc, curr) => acc + curr.sgstAmount, 0);
     
     let finalY = doc.lastAutoTable.finalY + 15;
     
@@ -457,18 +364,16 @@ export default function Purchases() {
     doc.text('Report Summary', 14, finalY);
     
     doc.setFontSize(10);
-    doc.text(`Total Purchases: ${filteredPurchases.length} invoices`, 14, finalY + 8);
+    doc.text(`Total Purchases: ${filteredPurchasesForPDF.length} invoices`, 14, finalY + 8);
     doc.text(`Total CGST Paid: ${safeFormat(totalCGST)}`, 14, finalY + 14);
     doc.text(`Total SGST Paid: ${safeFormat(totalSGST)}`, 14, finalY + 20);
     doc.text(`Total Gross Volume: ${safeFormat(totalVolume)}`, 14, finalY + 26);
 
-    // Authorized Signatory Wrap
     const pageWidth = doc.internal.pageSize.width || doc.internal.pageSize.getWidth();
     doc.setFontSize(11);
     doc.setTextColor(40);
     doc.text('For Shree Babaji Welding Works', pageWidth - 14, finalY + 12, { align: 'right' });
     
-    // Line for signature
     doc.setLineWidth(0.5);
     doc.line(pageWidth - 70, finalY + 28, pageWidth - 14, finalY + 28);
     
@@ -483,7 +388,6 @@ export default function Purchases() {
     }
   };
 
-  // Global Computed State for Rendered Views
   const filteredPurchases = purchases.filter(bill => {
       let valid = true;
       if (filterFromDate && new Date(bill.date) < new Date(filterFromDate)) valid = false;
@@ -539,12 +443,12 @@ export default function Purchases() {
           </button>
           
           <button 
-            onClick={() => {
+            onClick={async () => {
               if (window.confirm('WARNING: Are you sure you want to delete ALL purchase bills and suppliers? This action cannot be undone!')) {
-                setPurchases([]);
-                setSuppliers([]);
-                localStorage.removeItem('sbbj_purchases_v2');
-                localStorage.removeItem('sbbj_suppliers');
+                setIsLoading(true);
+                await supabase.from('purchases_v2').delete().neq('id', '');
+                await supabase.from('suppliers').delete().neq('id', '');
+                fetchData();
               }
             }}
             style={{
@@ -633,14 +537,20 @@ export default function Purchases() {
             </tr>
           </thead>
           <tbody>
-            {filteredPurchases.length === 0 && (
+            {isLoading ? (
+              <tr>
+                <td colSpan="6" style={{ padding: '3rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
+                  <Loader2 size={24} className="spin" style={{ margin: '0 auto', display: 'block', marginBottom: '1rem' }} />
+                  Loading purchases from database...
+                </td>
+              </tr>
+            ) : filteredPurchases.length === 0 ? (
               <tr>
                 <td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
                   No bills recorded yet. Add a supplier, then log a bill.
                 </td>
               </tr>
-            )}
-            {filteredPurchases.map((bill, i) => {
+            ) : filteredPurchases.map((bill, i) => {
               const supplier = suppliers.find(s => s.id === bill.supplierId);
               return (
                 <tr key={bill.id} style={{ borderBottom: '1px solid var(--clr-card-border)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
@@ -799,85 +709,108 @@ export default function Purchases() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                   <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Invoice Number</label>
-                  <input type="text" value={purchaseForm.invoiceNo} onChange={(e) => setPurchaseForm({...purchaseForm, invoiceNo: e.target.value})} required placeholder="INV-2026-X" style={{ background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.75rem', outline: 'none' }} />
+                  <input type="text" value={purchaseForm.invoiceNo} onChange={(e) => setPurchaseForm({...purchaseForm, invoiceNo: e.target.value})} required style={{ background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.75rem', outline: 'none' }} />
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Supplier Entity</label>
-                  <select value={purchaseForm.supplierId} onChange={(e) => setPurchaseForm({...purchaseForm, supplierId: e.target.value})} required style={{ background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.75rem', outline: 'none' }}>
-                    <option value="" disabled>Select Supplier</option>
-                    {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Select Supplier</label>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <select 
+                    value={purchaseForm.supplierId} 
+                    onChange={(e) => setPurchaseForm({...purchaseForm, supplierId: e.target.value})} 
+                    required 
+                    style={{ flex: 1, background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.75rem', outline: 'none' }}
+                  >
+                    <option value="" disabled>Choose Supplier...</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.id}>{s.name} ({s.gstin})</option>
+                    ))}
                   </select>
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Supplier GSTIN</label>
-                  <input type="text" value={selectedSupplierGstin} readOnly placeholder="Auto-filled" style={{ background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text-dim)', padding: '0.75rem', outline: 'none', cursor: 'not-allowed' }} />
-                </div>
+                {selectedSupplierGstin && (
+                  <div style={{ fontSize: '0.75rem', color: 'var(--clr-primary-light)', marginTop: '0.25rem' }}>
+                    Selected GSTIN: {selectedSupplierGstin}
+                  </div>
+                )}
               </div>
 
-              <div style={{ height: '1px', background: 'var(--clr-card-border)', margin: '0.5rem 0' }} />
-
-              <div style={{ marginBottom: '0.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <label style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--clr-text)' }}>Taxable Value Breakdown</label>
-                  <button type="button" onClick={addTaxableRow} style={{ fontSize: '0.8rem', color: 'var(--clr-primary-light)', background: 'none', border: 'none', cursor: 'pointer', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
-                    <Plus size={14} /> Add Tax Slab
+              {/* Dynamic Items (Tax Slabs) */}
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                  <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Taxable Amounts (Base Price)</label>
+                  <button type="button" onClick={addTaxableRow} style={{ background: 'transparent', color: 'var(--clr-primary-light)', border: 'none', fontSize: '0.8rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.2rem' }}>
+                    <Plus size={14} /> Add Slab
                   </button>
                 </div>
                 
-                {purchaseForm.items.map((item, index) => (
-                  <div key={item.id} style={{ display: 'flex', gap: '1rem', alignItems: 'flex-end', marginBottom: '1rem', background: 'var(--clr-bg-2)', padding: '1rem', borderRadius: 'var(--radius-md)' }}>
-                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                        <label style={{ fontSize: '0.75rem', color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>Amount (₹)</label>
-                        <input type="number" step="0.01" value={item.amount} onChange={(e) => updateTaxableRow(item.id, 'amount', e.target.value)} required placeholder="0.00" style={{ background: 'var(--clr-bg)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.6rem', outline: 'none' }} />
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {purchaseForm.items.map((item, index) => (
+                    <div key={item.id} style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 2, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <input 
+                          type="number" 
+                          step="0.01"
+                          placeholder="Amount (e.g. 5000)" 
+                          value={item.amount} 
+                          onChange={(e) => updateTaxableRow(item.id, 'amount', e.target.value)}
+                          required
+                          style={{ background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.75rem', outline: 'none', width: '100%' }}
+                        />
                       </div>
-                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                        <label style={{ fontSize: '0.75rem', color: 'var(--clr-text-muted)', textTransform: 'uppercase' }}>GST Rate Category</label>
-                        <select value={item.gstRate} onChange={(e) => updateTaxableRow(item.id, 'gstRate', e.target.value)} required style={{ background: 'var(--clr-bg)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.6rem', outline: 'none' }}>
-                          <option value="2.5">5% Total (2.5% CGST + 2.5% SGST)</option>
-                          <option value="6">12% Total (6% CGST + 6% SGST)</option>
-                          <option value="9">18% Total (9% CGST + 9% SGST)</option>
-                          <option value="14">28% Total (14% CGST + 14% SGST)</option>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <select 
+                          value={item.gstRate} 
+                          onChange={(e) => updateTaxableRow(item.id, 'gstRate', e.target.value)}
+                          style={{ background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: 'var(--clr-text)', padding: '0.75rem', outline: 'none', width: '100%' }}
+                        >
+                          <option value="2.5">5% (2.5+2.5)</option>
+                          <option value="6">12% (6+6)</option>
+                          <option value="9">18% (9+9)</option>
+                          <option value="14">28% (14+14)</option>
                         </select>
                       </div>
-                      <button type="button" onClick={() => removeTaxableRow(item.id)} disabled={purchaseForm.items.length === 1} style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.2)', padding: '0.6rem', borderRadius: 'var(--radius-sm)', cursor: purchaseForm.items.length === 1 ? 'not-allowed' : 'pointer', opacity: purchaseForm.items.length === 1 ? 0.5 : 1 }}>
-                        <X size={18} />
+                      <button 
+                        type="button" 
+                        onClick={() => removeTaxableRow(item.id)}
+                        disabled={purchaseForm.items.length === 1}
+                        style={{ padding: '0.75rem', background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)', color: purchaseForm.items.length === 1 ? 'var(--clr-text-dim)' : '#ef4444', cursor: purchaseForm.items.length === 1 ? 'not-allowed' : 'pointer' }}
+                      >
+                        <Trash2 size={16} />
                       </button>
-                  </div>
-                ))}
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div style={{ background: 'rgba(230,92,0,0.05)', border: '1px dashed var(--clr-primary)', borderRadius: 'var(--radius-md)', padding: '1.25rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', color: 'var(--clr-text-muted)', fontSize: '0.9rem' }}>
-                  <span>Total Base Amount</span>
+              {/* Calculated Summary */}
+              <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed var(--clr-card-border)', borderRadius: 'var(--radius-sm)', padding: '1rem', marginTop: '0.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.85rem', color: 'var(--clr-text-muted)' }}>
+                  <span>Total Base Amount:</span>
                   <span>{formatINR(calculatedAmounts.baseTotal)}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', color: 'var(--clr-text-muted)', fontSize: '0.9rem' }}>
-                  <span>Total CGST</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.85rem', color: 'var(--clr-text-muted)' }}>
+                  <span>Total CGST:</span>
                   <span>{formatINR(calculatedAmounts.cgst)}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', color: 'var(--clr-text-muted)', fontSize: '0.9rem' }}>
-                  <span>Total SGST</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem', fontSize: '0.85rem', color: 'var(--clr-text-muted)' }}>
+                  <span>Total SGST:</span>
                   <span>{formatINR(calculatedAmounts.sgst)}</span>
                 </div>
-                <div style={{ height: '1px', background: 'var(--clr-card-border)', marginBottom: '1rem' }} />
-                <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--clr-text)', fontSize: '1.1rem', fontWeight: 700 }}>
-                  <span>Total Invoice Value</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '0.75rem', borderTop: '1px solid var(--clr-card-border)', fontSize: '1.1rem', fontWeight: 700, color: '#10b981' }}>
+                  <span>Grand Total:</span>
                   <span>{formatINR(calculatedAmounts.total)}</span>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-                <button type="button" onClick={() => setIsPurchaseModalOpen(false)} style={{ flex: 1, background: 'transparent', color: 'var(--clr-text)', border: '1px solid var(--clr-card-border)', padding: '0.85rem', borderRadius: 'var(--radius-full)', fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer' }}>Cancel</button>
-                <button type="submit" style={{ flex: 1, background: 'linear-gradient(135deg, var(--clr-primary), var(--clr-primary-dark))', color: '#fff', border: 'none', padding: '0.85rem', borderRadius: 'var(--radius-full)', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer' }}>Save Bill</button>
-              </div>
-
+              <button type="submit" style={{ background: 'linear-gradient(135deg, var(--clr-primary), var(--clr-primary-dark))', color: '#fff', border: 'none', padding: '0.85rem', borderRadius: 'var(--radius-full)', fontSize: '0.95rem', fontWeight: 700, cursor: 'pointer', marginTop: '0.5rem' }}>
+                {editingPurchaseId ? 'Update Purchase Bill' : 'Log Purchase Bill'}
+              </button>
             </form>
           </div>
         </div>
       )}
+
     </div>
   );
 }

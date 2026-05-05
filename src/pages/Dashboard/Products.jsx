@@ -1,25 +1,15 @@
 import { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, X } from 'lucide-react';
-
-const DEFAULT_PRODUCTS = [
-  { id: 'PRD-001', name: 'Heavy Duty Cultivator', category: 'Tillage', price: '₹45,000', stock: 12, status: 'Active' },
-  { id: 'PRD-002', name: 'MB Mould Board Plow', category: 'Plowing', price: '₹32,000', stock: 8, status: 'Active' },
-  { id: 'PRD-003', name: 'Disc Harrow (16 Disc)', category: 'Harrowing', price: '₹55,000', stock: 5, status: 'Low Stock' },
-  { id: 'PRD-004', name: 'Precision Seed Drill', category: 'Seeding', price: '₹68,000', stock: 0, status: 'Out of Stock' },
-  { id: 'PRD-005', name: 'Rotary Weeder', category: 'Weeding', price: '₹18,000', stock: 24, status: 'Active' },
-];
+import { Plus, Edit2, Trash2, X, Loader2 } from 'lucide-react';
+import { supabase } from '../../lib/supabaseClient';
 
 export default function Products() {
-  const [products, setProducts] = useState(() => {
-    const saved = localStorage.getItem('sbbj_products');
-    if (saved) return JSON.parse(saved);
-    return DEFAULT_PRODUCTS;
-  });
-
+  const [products, setProducts] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
-    id: '',
+    id: '', // Maps to sku
+    db_id: '', // Maps to UUID id
     name: '',
     category: 'Tillage',
     price: '',
@@ -27,10 +17,24 @@ export default function Products() {
     status: 'Active'
   });
 
-  // Save to local storage automatically
   useEffect(() => {
-    localStorage.setItem('sbbj_products', JSON.stringify(products));
-  }, [products]);
+    fetchProducts();
+  }, []);
+
+  const fetchProducts = async () => {
+    setIsLoading(true);
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .order('created_at', { ascending: false });
+      
+    if (error) {
+      console.error('Error fetching products:', error);
+    } else {
+      setProducts(data || []);
+    }
+    setIsLoading(false);
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -44,6 +48,7 @@ export default function Products() {
     setIsEditing(false);
     setFormData({
       id: `PRD-${String(products.length + 1).padStart(3, '0')}`,
+      db_id: '',
       name: '',
       category: 'Tillage',
       price: '',
@@ -55,17 +60,31 @@ export default function Products() {
 
   const handleEditClick = (product) => {
     setIsEditing(true);
-    setFormData(product);
+    setFormData({
+      id: product.sku,
+      db_id: product.id,
+      name: product.name,
+      category: product.category,
+      price: product.price.toString(),
+      stock: product.stock,
+      status: product.status
+    });
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = async (db_id) => {
     if (window.confirm('Are you sure you want to delete this product?')) {
-      setProducts(products.filter(p => p.id !== id));
+      const { error } = await supabase.from('products').delete().eq('id', db_id);
+      if (!error) {
+        setProducts(products.filter(p => p.id !== db_id));
+      } else {
+        alert('Error deleting product');
+        console.error(error);
+      }
     }
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     
     // Calculate new status based on stock if Active or Low Stock
@@ -74,15 +93,43 @@ export default function Products() {
     else if (formData.stock <= 5 && formData.status !== 'Out of Stock') newStatus = 'Low Stock';
     else if (formData.stock > 5 && newStatus === 'Low Stock') newStatus = 'Active';
 
-    const finalData = { ...formData, status: newStatus };
+    // Clean price string to number
+    const numericPrice = parseFloat(formData.price.toString().replace(/[^\d.-]/g, '')) || 0;
+
+    const payload = {
+      sku: formData.id,
+      name: formData.name,
+      category: formData.category,
+      price: numericPrice,
+      stock: formData.stock,
+      min_stock: 5,
+      status: newStatus
+    };
 
     if (isEditing) {
-      setProducts(products.map(p => p.id === formData.id ? finalData : p));
+      const { error } = await supabase
+        .from('products')
+        .update(payload)
+        .eq('id', formData.db_id);
+        
+      if (!error) {
+        fetchProducts();
+        setIsModalOpen(false);
+      } else {
+        alert('Error updating product: ' + error.message);
+      }
     } else {
-      setProducts([...products, finalData]);
+      const { error } = await supabase
+        .from('products')
+        .insert([payload]);
+        
+      if (!error) {
+        fetchProducts();
+        setIsModalOpen(false);
+      } else {
+        alert('Error creating product: ' + error.message);
+      }
     }
-    
-    setIsModalOpen(false);
   };
 
   return (
@@ -124,37 +171,45 @@ export default function Products() {
             </tr>
           </thead>
           <tbody>
-            {products.length === 0 && (
+            {isLoading ? (
+              <tr>
+                <td colSpan="7" style={{ padding: '3rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
+                  <Loader2 size={24} className="spin" style={{ margin: '0 auto', display: 'block', marginBottom: '1rem' }} />
+                  Loading products from database...
+                </td>
+              </tr>
+            ) : products.length === 0 ? (
               <tr>
                 <td colSpan="7" style={{ padding: '2rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
                   No products found. Click "Add Product" to create one.
                 </td>
               </tr>
+            ) : (
+              products.map((product, i) => (
+                <tr key={product.id} style={{ borderBottom: '1px solid var(--clr-card-border)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
+                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)', fontFamily: 'monospace' }}>{product.sku}</td>
+                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text)', fontWeight: 500 }}>{product.name}</td>
+                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{product.category}</td>
+                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text)' }}>₹{Number(product.price).toLocaleString()}</td>
+                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{product.stock} units</td>
+                  <td style={{ padding: '1rem 1.5rem' }}>
+                    <span style={{ 
+                      fontSize: '0.7rem', fontWeight: 600, padding: '0.2rem 0.6rem', borderRadius: 'var(--radius-full)', 
+                      background: product.status === 'Active' ? 'rgba(16, 185, 129, 0.15)' : product.status === 'Low Stock' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
+                      color: product.status === 'Active' ? '#10b981' : product.status === 'Low Stock' ? '#f59e0b' : '#ef4444' 
+                    }}>
+                      {product.status}
+                    </span>
+                  </td>
+                  <td style={{ padding: '1rem 1.5rem', textAlign: 'right' }}>
+                    <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                      <button onClick={() => handleEditClick(product)} style={{ background: 'none', border: 'none', color: 'var(--clr-text-dim)', cursor: 'pointer', transition: 'var(--trans-base)' }} title="Edit"><Edit2 size={16} /></button>
+                      <button onClick={() => handleDelete(product.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', transition: 'var(--trans-base)' }} title="Delete"><Trash2 size={16} /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))
             )}
-            {products.map((product, i) => (
-              <tr key={product.id} style={{ borderBottom: '1px solid var(--clr-card-border)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
-                <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)', fontFamily: 'monospace' }}>{product.id}</td>
-                <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text)', fontWeight: 500 }}>{product.name}</td>
-                <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{product.category}</td>
-                <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text)' }}>{product.price}</td>
-                <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{product.stock} units</td>
-                <td style={{ padding: '1rem 1.5rem' }}>
-                  <span style={{ 
-                    fontSize: '0.7rem', fontWeight: 600, padding: '0.2rem 0.6rem', borderRadius: 'var(--radius-full)', 
-                    background: product.status === 'Active' ? 'rgba(16, 185, 129, 0.15)' : product.status === 'Low Stock' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)', 
-                    color: product.status === 'Active' ? '#10b981' : product.status === 'Low Stock' ? '#f59e0b' : '#ef4444' 
-                  }}>
-                    {product.status}
-                  </span>
-                </td>
-                <td style={{ padding: '1rem 1.5rem', textAlign: 'right' }}>
-                  <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
-                    <button onClick={() => handleEditClick(product)} style={{ background: 'none', border: 'none', color: 'var(--clr-text-dim)', cursor: 'pointer', transition: 'var(--trans-base)' }} title="Edit"><Edit2 size={16} /></button>
-                    <button onClick={() => handleDelete(product.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', transition: 'var(--trans-base)' }} title="Delete"><Trash2 size={16} /></button>
-                  </div>
-                </td>
-              </tr>
-            ))}
           </tbody>
         </table>
       </div>
@@ -183,15 +238,17 @@ export default function Products() {
               
               {/* Product ID (Readonly) */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--clr-text-dim)', textTransform: 'uppercase' }}>Product ID</label>
+                <label style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--clr-text-dim)', textTransform: 'uppercase' }}>Product ID (SKU)</label>
                 <input 
                   type="text" 
                   name="id" 
                   value={formData.id} 
-                  readOnly 
+                  onChange={handleInputChange}
+                  readOnly={isEditing}
                   style={{
                     background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)',
-                    color: 'var(--clr-text-muted)', padding: '0.75rem', outline: 'none', cursor: 'not-allowed'
+                    color: 'var(--clr-text)', padding: '0.75rem', outline: 'none',
+                    opacity: isEditing ? 0.7 : 1
                   }}
                 />
               </div>
@@ -242,7 +299,7 @@ export default function Products() {
                     name="price" 
                     value={formData.price} 
                     onChange={handleInputChange} 
-                    placeholder="e.g. ₹45,000"
+                    placeholder="e.g. 45000"
                     required 
                     style={{
                       background: 'var(--clr-bg-2)', border: '1px solid var(--clr-card-border)', borderRadius: 'var(--radius-sm)',

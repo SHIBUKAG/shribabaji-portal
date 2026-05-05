@@ -1,18 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Plus, Users, CalendarCheck, IndianRupee, Trash2, Edit, X, Save, FileText } from 'lucide-react';
+import { Plus, Users, CalendarCheck, IndianRupee, Trash2, Edit, X, Save, FileText, Loader2 } from 'lucide-react';
+import { supabase } from '../../lib/supabaseClient';
 
 export default function Employees() {
   // --- STATE MANAGEMENT ---
   const [activeTab, setActiveTab] = useState('directory'); // 'directory', 'attendance', 'payroll'
   
   // Data State
-  const [employees, setEmployees] = useState(() => {
-    const saved = localStorage.getItem('sbbj_employees');
-    return saved ? JSON.parse(saved) : [
-      { id: 'EMP-001', name: 'Ramesh Singh', role: 'Head Welder', monthlySalary: 18000, phone: '9876543210' },
-      { id: 'EMP-002', name: 'Suresh Kumar', role: 'Helper', monthlySalary: 12000, phone: '8765432109' }
-    ];
-  });
+  const [employees, setEmployees] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
   
   const [attendance, setAttendance] = useState(() => {
     const saved = localStorage.getItem('sbbj_attendance');
@@ -45,8 +41,30 @@ export default function Employees() {
 
   // --- PERSISTENCE ---
   useEffect(() => {
-    localStorage.setItem('sbbj_employees', JSON.stringify(employees));
-  }, [employees]);
+    fetchEmployees();
+  }, []);
+
+  const fetchEmployees = async () => {
+    setIsLoading(true);
+    const { data, error } = await supabase
+      .from('employees')
+      .select('*')
+      .order('created_at', { ascending: true });
+    
+    if (!error && data) {
+      const mapped = data.map(emp => ({
+        id: emp.id,
+        name: emp.name,
+        role: emp.role,
+        monthlySalary: emp.salary,
+        phone: emp.phone
+      }));
+      setEmployees(mapped);
+    } else {
+      console.error('Error fetching employees:', error);
+    }
+    setIsLoading(false);
+  };
 
   useEffect(() => {
     localStorage.setItem('sbbj_attendance', JSON.stringify(attendance));
@@ -57,29 +75,47 @@ export default function Employees() {
   }, [advances]);
 
   // --- HANDLERS: DIRECTORY ---
-  const handleEmpSubmit = (e) => {
+  const handleEmpSubmit = async (e) => {
     e.preventDefault();
+    
+    const payload = {
+      name: empForm.name,
+      role: empForm.role,
+      salary: parseFloat(empForm.monthlySalary) || 0,
+      phone: empForm.phone,
+      department: 'Workshop',
+      join_date: new Date().toISOString().split('T')[0]
+    };
+
     if (editingEmpId) {
-      setEmployees(employees.map(emp => emp.id === editingEmpId ? { ...emp, ...empForm } : emp));
+      const { error } = await supabase.from('employees').update(payload).eq('id', editingEmpId);
+      if (!error) fetchEmployees();
+      else alert('Error updating employee');
     } else {
-      const newId = `EMP-${String(employees.length + 1).padStart(3, '0')}`;
-      setEmployees([...employees, { id: newId, ...empForm }]);
+      const { error } = await supabase.from('employees').insert([payload]);
+      if (!error) fetchEmployees();
+      else alert('Error adding employee');
     }
+    
     setIsEmpModalOpen(false);
     setEmpForm({ name: '', role: '', monthlySalary: '', phone: '' });
     setEditingEmpId(null);
   };
 
-  const deleteEmployee = (id) => {
+  const deleteEmployee = async (id) => {
     if (window.confirm('Are you sure you want to delete this employee?')) {
-      setEmployees(employees.filter(emp => emp.id !== id));
-      // Optionally cascade delete attendance and advances, but for payroll history it's better to keep or mark inactive.
+      const { error } = await supabase.from('employees').delete().eq('id', id);
+      if (!error) {
+        setEmployees(employees.filter(emp => emp.id !== id));
+      } else {
+        alert('Error deleting employee');
+      }
     }
   };
 
   const openEditEmp = (emp) => {
     setEditingEmpId(emp.id);
-    setEmpForm({ name: emp.name, role: emp.role, monthlySalary: emp.monthlySalary, phone: emp.phone });
+    setEmpForm({ name: emp.name, role: emp.role, monthlySalary: emp.monthlySalary.toString(), phone: emp.phone });
     setIsEmpModalOpen(true);
   };
 
@@ -265,27 +301,35 @@ export default function Employees() {
               </tr>
             </thead>
             <tbody>
-              {employees.length === 0 && (
+              {isLoading ? (
+                <tr>
+                  <td colSpan="5" style={{ padding: '3rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
+                    <Loader2 size={24} className="spin" style={{ margin: '0 auto', display: 'block', marginBottom: '1rem' }} />
+                    Loading employees from database...
+                  </td>
+                </tr>
+              ) : employees.length === 0 ? (
                 <tr>
                   <td colSpan="5" style={{ padding: '2rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
                     No employees added yet.
                   </td>
                 </tr>
+              ) : (
+                employees.map((emp, i) => (
+                  <tr key={emp.id} style={{ borderBottom: '1px solid var(--clr-card-border)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
+                    <td style={{ padding: '1rem 1.5rem', fontWeight: 500, color: 'var(--clr-text)' }}>{emp.name}</td>
+                    <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{emp.role}</td>
+                    <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{formatINR(emp.monthlySalary)}/mo</td>
+                    <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{emp.phone}</td>
+                    <td style={{ padding: '1rem 1.5rem', textAlign: 'right' }}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+                        <button onClick={() => openEditEmp(emp)} style={{ background: 'none', border: 'none', color: 'var(--clr-primary-light)', cursor: 'pointer' }}><Edit size={16} /></button>
+                        <button onClick={() => deleteEmployee(emp.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={16} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
               )}
-              {employees.map((emp, i) => (
-                <tr key={emp.id} style={{ borderBottom: '1px solid var(--clr-card-border)', background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)' }}>
-                  <td style={{ padding: '1rem 1.5rem', fontWeight: 500, color: 'var(--clr-text)' }}>{emp.name}</td>
-                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{emp.role}</td>
-                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{formatINR(emp.monthlySalary)}/mo</td>
-                  <td style={{ padding: '1rem 1.5rem', color: 'var(--clr-text-muted)' }}>{emp.phone}</td>
-                  <td style={{ padding: '1rem 1.5rem', textAlign: 'right' }}>
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                      <button onClick={() => openEditEmp(emp)} style={{ background: 'none', border: 'none', color: 'var(--clr-primary-light)', cursor: 'pointer' }}><Edit size={16} /></button>
-                      <button onClick={() => deleteEmployee(emp.id)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={16} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
             </tbody>
           </table>
         </div>

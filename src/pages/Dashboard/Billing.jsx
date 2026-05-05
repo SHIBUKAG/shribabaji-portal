@@ -1,26 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Plus, Users, FileText, Trash2, Download, Printer, X, Edit, Wallet } from 'lucide-react';
+import { Plus, Users, FileText, Trash2, Download, Printer, X, Edit, Wallet, Loader2 } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { supabase } from '../../lib/supabaseClient';
 
 export default function Billing() {
   // Data States
-  const [customers, setCustomers] = useState(() => {
-    const saved = localStorage.getItem('sbbj_customers');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [bills, setBills] = useState(() => {
-    const saved = localStorage.getItem('sbbj_sales_bills');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [products] = useState(() => {
-    const saved = localStorage.getItem('sbbj_products');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [customerPayments, setCustomerPayments] = useState(() => {
-    const saved = localStorage.getItem('sbbj_customer_payments');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [customers, setCustomers] = useState([]);
+  const [bills, setBills] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [customerPayments, setCustomerPayments] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Modal States
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
@@ -53,18 +43,38 @@ export default function Billing() {
   // Derived State
   const [calculatedAmounts, setCalculatedAmounts] = useState({ cgst: 0, sgst: 0, baseTotal: 0, total: 0, totalDiscount: 0 });
 
-  // Persistence
+  // Persistence (Supabase)
   useEffect(() => {
-    localStorage.setItem('sbbj_customers', JSON.stringify(customers));
-  }, [customers]);
+    fetchData();
+  }, []);
 
-  useEffect(() => {
-    localStorage.setItem('sbbj_sales_bills', JSON.stringify(bills));
-  }, [bills]);
+  const fetchData = async () => {
+    setIsLoading(true);
+    const [custRes, billsRes, prodRes, payRes] = await Promise.all([
+      supabase.from('customers').select('*'),
+      supabase.from('sales_bills').select('*').order('date', { ascending: false }),
+      supabase.from('products').select('*'),
+      supabase.from('customer_payments').select('*')
+    ]);
 
-  useEffect(() => {
-    localStorage.setItem('sbbj_customer_payments', JSON.stringify(customerPayments));
-  }, [customerPayments]);
+    if (!custRes.error) setCustomers(custRes.data);
+    if (!prodRes.error) setProducts(prodRes.data);
+    if (!billsRes.error) setBills(billsRes.data.map(b => ({
+      ...b,
+      invoiceNo: b.invoice_no,
+      customerId: b.customer_id,
+      baseTotal: Number(b.base_total),
+      cgstAmount: Number(b.cgst_amount),
+      sgstAmount: Number(b.sgst_amount),
+      totalAmount: Number(b.total_amount)
+    })));
+    if (!payRes.error) setCustomerPayments(payRes.data.map(p => ({
+      ...p,
+      entityId: p.entity_id,
+      amount: Number(p.amount)
+    })));
+    setIsLoading(false);
+  };
 
   // Recalculate bill structure totals dynamically
   useEffect(() => {
@@ -113,15 +123,22 @@ export default function Billing() {
   }, [billForm.customerPhone, isBillModalOpen, customers, editingBillId]);
 
   // Form Handlers
-  const handleCustomerSubmit = (e) => {
+  const handleCustomerSubmit = async (e) => {
     e.preventDefault();
     const newId = `CST-${String(customers.length + 1).padStart(3, '0')}`;
-    setCustomers([...customers, { id: newId, ...customerForm }]);
-    setIsCustomerModalOpen(false);
-    setCustomerForm({ name: '', phone: '', gstin: '', address: '' });
+    const payload = { id: newId, ...customerForm };
+    
+    const { error } = await supabase.from('customers').insert([payload]);
+    if (!error) {
+      fetchData();
+      setIsCustomerModalOpen(false);
+      setCustomerForm({ name: '', phone: '', gstin: '', address: '' });
+    } else {
+      alert('Error saving customer: ' + error.message);
+    }
   };
 
-  const handleBillSubmit = (e) => {
+  const handleBillSubmit = async (e) => {
     e.preventDefault();
     if (!billForm.customerPhone || !billForm.customerName) {
         alert("Please enter a Client Name and Phone number.");
@@ -136,41 +153,44 @@ export default function Billing() {
 
     // Auto-create customer if phone is new
     let resolvedCustomer = customers.find(c => c.phone === billForm.customerPhone);
-    let updatedCustomers = [...customers];
+    let customerId = resolvedCustomer?.id;
     
     if (!resolvedCustomer) {
-        resolvedCustomer = {
-            id: `CST-${String(customers.length + 1).padStart(3, '0')}`,
+        customerId = `CST-${String(customers.length + 1).padStart(3, '0')}`;
+        const newCustomer = {
+            id: customerId,
             name: billForm.customerName,
             phone: billForm.customerPhone,
             address: billForm.customerAddress,
             gstin: billForm.customerGstin
         };
-        updatedCustomers.push(resolvedCustomer);
-        setCustomers(updatedCustomers);
+        await supabase.from('customers').insert([newCustomer]);
+        fetchData(); // Sync the new customer
     }
 
-    const invoiceNoStr = `INV-${String(bills.length + 1).padStart(4, '0')}`;
+    const invoiceNoStr = editingBillId ? bills.find(b => b.id === editingBillId)?.invoiceNo : `INV-${String(bills.length + 1).padStart(4, '0')}`;
     const targetId = editingBillId || invoiceNoStr;
 
-    const newBill = {
+    const payload = {
         id: targetId,
-        invoiceNo: targetId,
+        invoice_no: invoiceNoStr,
         date: billForm.date,
-        customerId: resolvedCustomer.id,
-        paymentMode: billForm.paymentMode || 'Cash',
+        customer_id: customerId,
         items: billForm.items.map(i => ({...i, lineBase: (i.quantity * i.soldPrice)})),
-        baseTotal: calculatedAmounts.baseTotal,
-        cgstAmount: calculatedAmounts.cgst,
-        sgstAmount: calculatedAmounts.sgst,
-        totalAmount: calculatedAmounts.total,
-        totalDiscount: calculatedAmounts.totalDiscount
+        base_total: calculatedAmounts.baseTotal,
+        cgst_amount: calculatedAmounts.cgst,
+        sgst_amount: calculatedAmounts.sgst,
+        total_amount: calculatedAmounts.total
     };
 
     if (editingBillId) {
-        setBills(bills.map(b => b.id === editingBillId ? newBill : b));
+        const { error } = await supabase.from('sales_bills').update(payload).eq('id', editingBillId);
+        if (!error) fetchData();
+        else alert('Error updating bill: ' + error.message);
     } else {
-        setBills([...bills, newBill]);
+        const { error } = await supabase.from('sales_bills').insert([payload]);
+        if (!error) fetchData();
+        else alert('Error creating bill: ' + error.message);
     }
 
     closeBillModal();
@@ -219,9 +239,11 @@ export default function Billing() {
       setIsBillModalOpen(true);
   };
 
-  const deleteBill = (id) => {
+  const deleteBill = async (id) => {
       if (window.confirm("Delete this sales bill? Payment records tied to it might be orphaned.")) {
-          setBills(bills.filter(b => b.id !== id));
+          const { error } = await supabase.from('sales_bills').delete().eq('id', id);
+          if (!error) fetchData();
+          else alert('Error deleting bill');
       }
   };
 
@@ -240,7 +262,7 @@ export default function Billing() {
       setIsPaymentModalOpen(true);
   };
 
-  const handlePaymentSubmit = (e) => {
+  const handlePaymentSubmit = async (e) => {
       e.preventDefault();
       const amountParsed = parseFloat(paymentForm.amount);
       if (amountParsed <= 0 || amountParsed > paymentForm.dueAmount) {
@@ -248,18 +270,22 @@ export default function Billing() {
           return;
       }
       
-      const newPayment = {
+      const payload = {
           id: `PAY-${Date.now()}`,
-          entityId: paymentForm.customerId,
-          billId: paymentForm.billId,
+          entity_id: paymentForm.customerId,
           date: paymentForm.date,
           amount: amountParsed,
           mode: paymentForm.mode,
           reference: paymentForm.reference
       };
       
-      setCustomerPayments([...customerPayments, newPayment]);
-      setIsPaymentModalOpen(false);
+      const { error } = await supabase.from('customer_payments').insert([payload]);
+      if (!error) {
+        fetchData();
+        setIsPaymentModalOpen(false);
+      } else {
+        alert('Error recording payment: ' + error.message);
+      }
   };
 
   // Taxable Rows array mutations
@@ -286,8 +312,8 @@ export default function Billing() {
         if (field === 'productId') {
             const prod = products.find(p => p.id === value);
             if (prod) {
-                // Parse "₹45,000" to 45000
-                const numRate = parseFloat(prod.price.replace(/[^\d.-]/g, '')) || 0;
+                // Since price is numeric in Supabase
+                const numRate = parseFloat(prod.price) || 0;
                 items = items.map(item => item.id === id ? { ...item, rate: numRate, soldPrice: numRate, manualName: prod.name } : item);
             }
         }
@@ -439,7 +465,7 @@ export default function Billing() {
           doc.text("Grand Total:", 120, finalY + 24);
           doc.text(formatAmt(bill.totalAmount), 190, finalY + 24, { align: 'right' });
           
-          const billPayments = customerPayments.filter(p => p.billId === bill.id);
+          const billPayments = customerPayments.filter(p => p.reference?.includes(bill.invoiceNo)); // Note: payment ref stores invoiceNo
           const paidAmount = billPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
           const dueAmount = Math.max(0, bill.totalAmount - paidAmount);
 
@@ -583,18 +609,25 @@ export default function Billing() {
             </tr>
           </thead>
           <tbody>
-            {bills.length === 0 && (
+            {isLoading ? (
+              <tr>
+                <td colSpan="6" style={{ padding: '3rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
+                  <Loader2 size={24} className="spin" style={{ margin: '0 auto', display: 'block', marginBottom: '1rem' }} />
+                  Loading invoices from database...
+                </td>
+              </tr>
+            ) : bills.length === 0 ? (
               <tr>
                 <td colSpan="6" style={{ padding: '2rem', textAlign: 'center', color: 'var(--clr-text-dim)' }}>
                   No invoices generated yet.
                 </td>
               </tr>
-            )}
-            {bills.map((b, i) => {
+            ) : bills.map((b, i) => {
               const customer = customers.find(c => c.id === b.customerId);
               
-              // Calculate specific bill payments
-              const billPayments = customerPayments.filter(p => p.billId === b.id);
+              // Calculate specific bill payments based on customer ID and invoice reference
+              // Our ledger saves reference as `Payment for ${bill.invoiceNo}`
+              const billPayments = customerPayments.filter(p => p.entityId === b.customerId && p.reference?.includes(b.invoiceNo));
               const paidAmount = billPayments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
               const dueAmount = Math.max(0, b.totalAmount - paidAmount);
 
